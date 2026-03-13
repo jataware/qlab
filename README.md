@@ -14,7 +14,7 @@ Point it at a directory of images and it opens a browser UI where you can:
 ## Install
 
 ```bash
-pip install "git+ssh://git@github.com/<owner>/<repo>.git"
+pip install "git+https://github.com/jataware/qlab.git"
 ```
 
 ## Run
