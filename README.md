@@ -9,6 +9,8 @@ Point it at a directory of images and it opens a browser UI where you can:
 - add an annotation to each box
 - move between images with the arrow keys
 
+![QLab screenshot](screenshot.png)
+
 ## Install
 
 ```bash
