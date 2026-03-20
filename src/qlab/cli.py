@@ -84,6 +84,8 @@ class AnnotationStore:
             if path.name.startswith("._"):
                 continue
             relative = path.relative_to(self.image_dir).as_posix()
+            if relative.startswith("_redacted/"):
+                continue
             images.append(ImageEntry(image_id=relative, name=relative, path=path))
         if not images:
             raise SystemExit(f"No supported images found under {self.image_dir}")
@@ -210,6 +212,32 @@ class AnnotationStore:
 
         return [cls._coerce_box(raw_box, default_annotation=default_annotation) for raw_box in raw_bboxes]
 
+    def save_redacted(self, image_id: str, boxes: list[dict[str, Any]]) -> Path:
+        if image_id not in self.images_by_id:
+            raise KeyError(image_id)
+
+        coerced = [self._coerce_box(b) for b in boxes]
+        if not coerced:
+            raise ValueError("at least one redaction box is required")
+
+        from PIL import Image, ImageDraw  # lazy import
+
+        src_path = self.images_by_id[image_id].path
+        img = Image.open(src_path)
+        img = img.convert("RGB")
+        draw = ImageDraw.Draw(img)
+        for box in coerced:
+            x0 = box["x"]
+            y0 = box["y"]
+            x1 = x0 + box["width"]
+            y1 = y0 + box["height"]
+            draw.rectangle([x0, y0, x1, y1], fill=(255, 255, 255))
+
+        dest = self.image_dir / "_redacted" / image_id
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        img.save(dest)
+        return dest
+
     @staticmethod
     def _coerce_image_size(raw_size: Any) -> dict[str, int] | None:
         if raw_size in (None, "", {}):
@@ -264,6 +292,30 @@ def build_handler(store: AnnotationStore, static_dir: Path) -> type[BaseHTTPRequ
         def do_POST(self) -> None:
             parsed = urlparse(self.path)
             path = parsed.path
+
+            if path.startswith("/api/redact/"):
+                image_id = unquote(path.removeprefix("/api/redact/"))
+                content_length = int(self.headers.get("Content-Length", "0"))
+                body = self.rfile.read(content_length)
+                try:
+                    payload = json.loads(body.decode("utf-8") or "{}")
+                    boxes = payload.get("boxes", [])
+                    dest = store.save_redacted(image_id, boxes)
+                except json.JSONDecodeError:
+                    self.send_error(HTTPStatus.BAD_REQUEST, "Request body must be valid JSON")
+                    return
+                except KeyError:
+                    self.send_error(HTTPStatus.NOT_FOUND, "Unknown image id")
+                    return
+                except ValueError as exc:
+                    self.send_error(HTTPStatus.BAD_REQUEST, str(exc))
+                    return
+                except Exception as exc:
+                    self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
+                    return
+                self._send_json({"ok": True, "path": str(dest)})
+                return
+
             if not path.startswith("/api/annotations/"):
                 self.send_error(HTTPStatus.NOT_FOUND, "Not found")
                 return

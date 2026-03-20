@@ -1,6 +1,6 @@
 [project]
 authors = [{name = "bkj", email = "bkj.322@gmail.com"}]
-dependencies = []
+dependencies = ["pillow>=10.1"]
 description = "Local browser-based image annotation tool"
 name = "qlab"
 readme = "README.md"

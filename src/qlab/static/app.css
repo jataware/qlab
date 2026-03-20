@@ -16,6 +16,12 @@
   --box-selected-fill: rgba(77, 163, 255, 0.18);
   --draft: rgba(102, 255, 194, 0.14);
   --draft-stroke: #66ffc2;
+  --redact: #ff4d4d;
+  --redact-fill: rgba(255, 77, 77, 0.14);
+  --redact-selected: #ff7070;
+  --redact-selected-fill: rgba(255, 112, 112, 0.18);
+  --redact-draft: rgba(255, 77, 77, 0.14);
+  --redact-draft-stroke: #ff4d4d;
   --shadow: 0 20px 40px rgba(0, 0, 0, 0.32);
   --font-sans: "Avenir Next", "Segoe UI", sans-serif;
   --font-mono: "SF Mono", "IBM Plex Mono", "Menlo", monospace;
@@ -390,6 +396,68 @@ input {
 
 .annotator-status.is-error {
   color: #ff9b9b;
+}
+
+.redaction-box-shape {
+  fill: var(--redact-fill);
+  shape-rendering: crispEdges;
+  stroke: var(--redact);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.redaction-box.is-selected .redaction-box-shape {
+  fill: var(--redact-selected-fill);
+  stroke: var(--redact-selected);
+}
+
+.redaction-box-label-bg {
+  fill: rgba(10, 13, 18, 0.95);
+  stroke: rgba(255, 77, 77, 0.3);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.redaction-box-label {
+  fill: var(--redact);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  pointer-events: none;
+  user-select: none;
+}
+
+.redaction-box .annotator-box-handle {
+  fill: var(--redact-selected);
+}
+
+.redaction-draft-box {
+  fill: var(--redact-draft);
+  shape-rendering: crispEdges;
+  stroke: var(--redact-draft-stroke);
+  stroke-dasharray: 8 4;
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.annotator-box.is-dimmed {
+  opacity: 0.3;
+}
+
+.annotator-button-redact {
+  background: rgba(255, 77, 77, 0.1);
+  border-color: rgba(255, 77, 77, 0.24);
+  color: #ffb0b0;
+}
+
+.annotator-button-redact.is-active {
+  background: rgba(255, 77, 77, 0.25);
+  border-color: rgba(255, 77, 77, 0.5);
+  color: #fff;
+}
+
+.annotator-shell.is-redacting .annotator-viewer-panel {
+  border-color: rgba(255, 77, 77, 0.3);
 }
 
 @media (max-width: 1080px) {
