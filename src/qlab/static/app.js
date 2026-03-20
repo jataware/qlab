@@ -25,7 +25,6 @@
     savedAt: null,
     isSpacePressed: false,
     boxCounter: 0,
-    mode: "annotate",
     redactionBoxes: [],
     selectedRedactionBoxId: null,
     redactionBoxCounter: 0,
@@ -125,27 +124,13 @@
       className: "annotator-button-primary",
       onClick: () => void flushSave({ force: true }),
     });
-    el.redactToggleButton = createButton({
-      label: "Redactor",
-      className: "annotator-button-redact",
-      title: "R",
-      onClick: () => toggleMode(),
-    });
-    el.saveRedactedButton = createButton({
-      label: "Save Redacted",
-      className: "annotator-button-danger",
-      onClick: () => void saveRedactedImage(),
-    });
-    el.saveRedactedButton.style.display = "none";
     controls.append(
       el.prevButton,
       el.nextButton,
       el.fitButton,
       el.resetZoomButton,
       el.deleteBoxButton,
-      el.saveButton,
-      el.redactToggleButton,
-      el.saveRedactedButton
+      el.saveButton
     );
     topbar.append(identity, controls);
 
@@ -215,7 +200,7 @@
       "<span>Delete: remove selected box</span>",
       "<span>Ctrl + wheel or pinch: zoom</span>",
       "<span>Wheel or Space + drag: pan</span>",
-      "<span>R: toggle redactor mode</span>",
+      "<span>Shift + draw: redact</span>",
     ].join("");
     sessionCard.append(el.outputPath, el.zoomText, shortcuts, el.status);
 
@@ -229,10 +214,6 @@
 
   function bindEvents() {
     el.annotationInput.addEventListener("input", () => {
-      if (state.mode === "redact") {
-        el.annotationInput.value = "";
-        return;
-      }
       const selected = getSelectedBox();
       if (!selected) {
         el.annotationInput.value = "";
@@ -433,9 +414,6 @@
       } else if (event.key === "Escape") {
         event.preventDefault();
         setSelectedBox(null);
-      } else if (event.key === "r" || event.key === "R") {
-        event.preventDefault();
-        toggleMode();
       }
     });
 
@@ -466,36 +444,24 @@
   }
 
   function createBoxId() {
-    if (state.mode === "redact") {
-      state.redactionBoxCounter += 1;
-      return `rbox-${state.redactionBoxCounter}`;
-    }
     state.boxCounter += 1;
     return `box-${state.boxCounter}`;
   }
 
   function getActiveBoxes() {
-    return state.mode === "redact" ? state.redactionBoxes : state.boxes;
+    return state.boxes;
   }
 
   function setActiveBoxes(boxes) {
-    if (state.mode === "redact") {
-      state.redactionBoxes = boxes;
-    } else {
-      state.boxes = boxes;
-    }
+    state.boxes = boxes;
   }
 
   function getActiveSelectedId() {
-    return state.mode === "redact" ? state.selectedRedactionBoxId : state.selectedBoxId;
+    return state.selectedBoxId;
   }
 
   function setActiveSelectedId(id) {
-    if (state.mode === "redact") {
-      state.selectedRedactionBoxId = id;
-    } else {
-      state.selectedBoxId = id;
-    }
+    state.selectedBoxId = id;
   }
 
   function roundBox(box) {
@@ -537,9 +503,15 @@
       .filter((box) => box && typeof box === "object")
       .map((box) => normalizeBox(box, hasBoxAnnotation ? "" : legacyAnnotation));
 
+    const rawRedactions = Array.isArray(record && record.redactions) ? record.redactions : [];
+    const redactions = rawRedactions
+      .filter((box) => box && typeof box === "object")
+      .map((box) => roundBox(box));
+
     return {
       image: (record && record.image) || imageId,
       bboxes,
+      redactions,
       image_size:
         record && record.image_size && typeof record.image_size === "object"
           ? {
@@ -558,8 +530,23 @@
     }));
   }
 
+  function loadRedactionsForRecord(record) {
+    return record.redactions.map((box) => {
+      state.redactionBoxCounter += 1;
+      return {
+        id: `rbox-${state.redactionBoxCounter}`,
+        ...roundBox(box),
+        annotation: "",
+      };
+    });
+  }
+
   function serializeBoxes() {
     return state.boxes.map((box) => normalizeBox(box));
+  }
+
+  function serializeRedactions() {
+    return state.redactionBoxes.map((box) => roundBox(box));
   }
 
   function getSelectedBox() {
@@ -765,10 +752,12 @@
   }
 
   function startDraw(event, point) {
+    const forceRedact = event.shiftKey;
     state.interaction = {
       mode: "drawing",
       pointerId: event.pointerId,
       origin: point,
+      forceRedact,
     };
     state.draftBox = {
       x: point.x,
@@ -840,20 +829,26 @@
       const normalized = normalizeRect(interaction.origin, point);
       state.draftBox = null;
       if (!cancelled && normalized.width >= MIN_DRAW_SIZE && normalized.height >= MIN_DRAW_SIZE) {
-        const newBox = {
-          id: createBoxId(),
-          ...roundBox(normalized),
-          annotation: "",
-        };
-        getActiveBoxes().push(newBox);
-        setActiveSelectedId(newBox.id);
-        updateAnnotationEditor();
-        if (state.mode === "annotate") {
-          registerEdit("Box added");
+        if (interaction.forceRedact) {
+          state.redactionBoxCounter += 1;
+          const newBox = {
+            id: `rbox-${state.redactionBoxCounter}`,
+            ...roundBox(normalized),
+            annotation: "",
+          };
+          state.redactionBoxes.push(newBox);
+          updateAnnotationEditor();
+          registerEdit("Redaction box added");
         } else {
-          renderOverlay();
-          updateNavState();
-          updateStatus("Redaction box added");
+          const newBox = {
+            id: createBoxId(),
+            ...roundBox(normalized),
+            annotation: "",
+          };
+          getActiveBoxes().push(newBox);
+          setActiveSelectedId(newBox.id);
+          updateAnnotationEditor();
+          registerEdit("Box added");
         }
       } else {
         renderOverlay();
@@ -885,11 +880,7 @@
       updateSelectionSummary();
       updateNavState();
       syncCursor();
-      if (state.mode === "annotate") {
-        registerEdit(interaction.mode === "moving" ? "Box moved" : "Box resized");
-      } else {
-        updateStatus(interaction.mode === "moving" ? "Redaction box moved" : "Redaction box resized");
-      }
+      registerEdit(interaction.mode === "moving" ? "Box moved" : "Box resized");
       return;
     }
 
@@ -982,6 +973,13 @@
       if (selected) groupClass += " is-selected";
       if (dimmed) groupClass += " is-dimmed";
       const group = createSvgElement("g", groupClass);
+
+      if (isRedaction) {
+        const fill = createSvgElement("rect", "redaction-box-fill");
+        rectAttributes(fill, box);
+        group.append(fill);
+      }
+
       const rect = createSvgElement("rect", isRedaction ? "redaction-box-shape" : "annotator-box-shape");
       rectAttributes(rect, box);
       group.append(rect);
@@ -1023,22 +1021,22 @@
     el.overlay.replaceChildren();
 
     const fragment = document.createDocumentFragment();
-    const isRedacting = state.mode === "redact";
 
-    renderBoxGroup(fragment, state.boxes, isRedacting ? null : state.selectedBoxId, {
+    renderBoxGroup(fragment, state.boxes, state.selectedBoxId, {
       classPrefix: "annotator",
       labelPrefix: "",
-      dimmed: isRedacting,
+      dimmed: false,
     });
 
-    renderBoxGroup(fragment, state.redactionBoxes, isRedacting ? state.selectedRedactionBoxId : null, {
+    renderBoxGroup(fragment, state.redactionBoxes, null, {
       classPrefix: "redaction",
       labelPrefix: "R",
-      dimmed: !isRedacting,
+      dimmed: false,
     });
 
     if (state.draftBox && state.draftBox.width && state.draftBox.height) {
-      const draftClass = isRedacting ? "redaction-draft-box" : "annotator-draft-box";
+      const isDraftRedact = state.interaction && state.interaction.forceRedact;
+      const draftClass = isDraftRedact ? "redaction-draft-box" : "annotator-draft-box";
       const draft = createSvgElement("rect", draftClass);
       rectAttributes(draft, state.draftBox);
       fragment.append(draft);
@@ -1050,14 +1048,12 @@
   function renderBoxList() {
     const boxes = getActiveBoxes();
     const selectedId = getActiveSelectedId();
-    const isRedacting = state.mode === "redact";
-    const prefix = isRedacting ? "R" : "Box ";
 
     el.boxList.replaceChildren();
     el.boxCount.textContent = `${boxes.length} ${boxes.length === 1 ? "box" : "boxes"}`;
 
     if (!boxes.length) {
-      el.boxList.append(createElement("div", "annotator-box-empty", isRedacting ? "No redaction boxes." : "No boxes on this image."));
+      el.boxList.append(createElement("div", "annotator-box-empty", "No boxes on this image."));
       return;
     }
 
@@ -1067,14 +1063,14 @@
         box.id === selectedId ? "annotator-box-row is-selected" : "annotator-box-row"
       );
       const pickButton = createButton({
-        label: `${prefix}${index + 1}`,
+        label: `Box ${index + 1}`,
         className: "annotator-box-row-main",
         onClick: () => setSelectedBox(box.id),
       });
       const label = createElement("div", "annotator-box-row-meta");
       label.textContent = `${box.x}, ${box.y} • ${box.width} × ${box.height}`;
       pickButton.append(label);
-      if (!isRedacting && box.annotation) {
+      if (box.annotation) {
         pickButton.append(createElement("div", "annotator-box-row-note", box.annotation));
       }
 
@@ -1092,21 +1088,18 @@
   function updateSelectionSummary() {
     const boxes = getActiveBoxes();
     const selected = getSelectedBox();
-    const isRedacting = state.mode === "redact";
     if (!selected) {
       el.selectionSummary.textContent = boxes.length
-        ? isRedacting ? "Select a redaction box to move or resize it." : "Select a box to move, resize, or annotate it."
-        : isRedacting ? "Draw redaction boxes on the image." : "Draw the first box directly on the image.";
+        ? "Select a box to move, resize, or annotate it."
+        : "Draw the first box directly on the image.";
       return;
     }
 
     const summary = [`Selected: ${selected.x}, ${selected.y} • ${selected.width} × ${selected.height}`];
-    if (!isRedacting) {
-      if (selected.annotation) {
-        summary.push(`Annotation: ${selected.annotation}`);
-      } else {
-        summary.push("Annotation: empty");
-      }
+    if (selected.annotation) {
+      summary.push(`Annotation: ${selected.annotation}`);
+    } else {
+      summary.push("Annotation: empty");
     }
     el.selectionSummary.textContent = summary.join(" · ");
   }
@@ -1142,12 +1135,6 @@
   }
 
   function updateAnnotationEditor() {
-    if (state.mode === "redact") {
-      el.annotationInput.disabled = true;
-      el.annotationInput.placeholder = "Annotations disabled in redactor mode";
-      el.annotationInput.value = "";
-      return;
-    }
     const selected = getSelectedBox();
     const nextValue = selected && typeof selected.annotation === "string" ? selected.annotation : "";
     const nextPlaceholder = selected
@@ -1166,17 +1153,13 @@
   function updateNavState() {
     const hasImage = Boolean(state.currentImage);
     const selected = getSelectedBox();
-    const isRedacting = state.mode === "redact";
     el.prevButton.disabled = !hasImage || state.currentIndex <= 0;
     el.nextButton.disabled = !hasImage || state.currentIndex >= state.images.length - 1;
     el.fitButton.disabled = !state.imageSize;
     el.resetZoomButton.disabled = !state.imageSize;
     el.deleteBoxButton.disabled = !selected;
-    el.clearAnnotationButton.disabled = !selected || !selected.annotation || isRedacting;
+    el.clearAnnotationButton.disabled = !selected || !selected.annotation;
     el.saveButton.disabled = !hasImage || !state.isDirty;
-    el.redactToggleButton.classList.toggle("is-active", isRedacting);
-    el.saveRedactedButton.style.display = isRedacting ? "" : "none";
-    el.saveRedactedButton.disabled = !hasImage || !state.redactionBoxes.length;
   }
 
   function updateStatus(message, { isError = false } = {}) {
@@ -1229,12 +1212,7 @@
       setActiveSelectedId(boxes[Math.max(0, index - 1)]?.id || boxes[0]?.id || null);
     }
     refreshStaticUi();
-    if (state.mode === "annotate") {
-      registerEdit("Box removed");
-    } else {
-      updateNavState();
-      updateStatus("Redaction box removed");
-    }
+    registerEdit("Box removed");
   }
 
   function deleteSelectedBox() {
@@ -1243,58 +1221,6 @@
       return;
     }
     removeBox(selected.id);
-  }
-
-  function toggleMode() {
-    state.mode = state.mode === "annotate" ? "redact" : "annotate";
-    setActiveSelectedId(null);
-    const shell = document.querySelector(".annotator-shell");
-    if (shell) {
-      shell.classList.toggle("is-redacting", state.mode === "redact");
-    }
-    if (el.annotationCard) {
-      el.annotationCard.style.display = state.mode === "redact" ? "none" : "";
-    }
-    refreshStaticUi();
-    updateStatus(state.mode === "redact" ? "Redactor mode" : "Annotate mode");
-  }
-
-  async function saveRedactedImage() {
-    if (!state.currentImage || !state.redactionBoxes.length) {
-      return;
-    }
-
-    const boxes = state.redactionBoxes.map((box) => ({
-      x: box.x,
-      y: box.y,
-      width: box.width,
-      height: box.height,
-    }));
-
-    updateStatus("Saving redacted image…");
-    el.saveRedactedButton.disabled = true;
-
-    try {
-      const response = await fetch(`/api/redact/${encodeURIComponent(state.currentImage.id)}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ boxes }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`Redact failed with status ${response.status}`);
-      }
-
-      const result = await response.json();
-      state.redactionBoxes = [];
-      state.selectedRedactionBoxId = null;
-      state.redactionBoxCounter = 0;
-      refreshStaticUi();
-      updateStatus(`Redacted image saved: ${result.path || "done"}`);
-    } catch (error) {
-      updateStatus(error instanceof Error ? error.message : "Redact failed", { isError: true });
-      el.saveRedactedButton.disabled = false;
-    }
   }
 
   function scheduleSave() {
@@ -1329,6 +1255,7 @@
     const snapshot = {
       imageId: state.currentImage.id,
       bboxes: serializeBoxes(),
+      redactions: serializeRedactions(),
       imageSize: state.imageSize ? { ...state.imageSize } : null,
       revision: state.editRevision,
     };
@@ -1344,6 +1271,7 @@
           },
           body: JSON.stringify({
             bboxes: snapshot.bboxes,
+            redactions: snapshot.redactions,
             image_size: snapshot.imageSize,
           }),
         });
@@ -1495,14 +1423,14 @@
     state.transform = { scale: 1, tx: 0, ty: 0 };
     state.isDirty = false;
     state.editRevision = 0;
-    state.redactionBoxes = [];
-    state.selectedRedactionBoxId = null;
     state.redactionBoxCounter = 0;
     applyTransform();
 
     if (!state.currentImage) {
       state.boxes = [];
       state.selectedBoxId = null;
+      state.redactionBoxes = [];
+      state.selectedRedactionBoxId = null;
       state.savedAt = null;
       el.annotationInput.value = "";
       el.image.removeAttribute("src");
@@ -1517,6 +1445,8 @@
     );
     state.boxes = loadBoxesForRecord(record);
     state.selectedBoxId = state.boxes[0]?.id || null;
+    state.redactionBoxes = loadRedactionsForRecord(record);
+    state.selectedRedactionBoxId = null;
     state.savedAt = record.updated_at || null;
     el.emptyState.classList.remove("is-visible");
     el.image.src = state.currentImage.url;

@@ -84,7 +84,7 @@ class AnnotationStore:
             if path.name.startswith("._"):
                 continue
             relative = path.relative_to(self.image_dir).as_posix()
-            if relative.startswith("_redacted/"):
+            if relative.startswith("_qlab/"):
                 continue
             images.append(ImageEntry(image_id=relative, name=relative, path=path))
         if not images:
@@ -141,22 +141,31 @@ class AnnotationStore:
             payload.get("bboxes", payload.get("bbox")),
             default_annotation=legacy_annotation,
         )
+        redactions = self._coerce_redactions(payload.get("redactions"))
         image_size = self._coerce_image_size(payload.get("image_size"))
 
         with self.lock:
-            if not bboxes:
+            if not bboxes and not redactions:
                 self.annotations.pop(image_id, None)
                 self._flush()
+                self._remove_redacted(image_id)
                 return None
 
             record = {
                 "image": image_id,
                 "bboxes": bboxes,
+                "redactions": redactions,
                 "image_size": image_size,
                 "updated_at": utc_now(),
             }
             self.annotations[image_id] = record
             self._flush()
+
+            if redactions:
+                self._write_redacted_image(image_id, redactions)
+            else:
+                self._remove_redacted(image_id)
+
             return record
 
     def _normalize_record(self, image_id: str, record: dict[str, Any]) -> dict[str, Any]:
@@ -167,6 +176,7 @@ class AnnotationStore:
                 record.get("bboxes", record.get("bbox")),
                 default_annotation=legacy_annotation,
             ),
+            "redactions": self._coerce_redactions(record.get("redactions")),
             "image_size": self._coerce_image_size(record.get("image_size")),
             "updated_at": str(record.get("updated_at") or "") or None,
         }
@@ -212,31 +222,51 @@ class AnnotationStore:
 
         return [cls._coerce_box(raw_box, default_annotation=default_annotation) for raw_box in raw_bboxes]
 
-    def save_redacted(self, image_id: str, boxes: list[dict[str, Any]]) -> Path:
-        if image_id not in self.images_by_id:
-            raise KeyError(image_id)
-
-        coerced = [self._coerce_box(b) for b in boxes]
-        if not coerced:
-            raise ValueError("at least one redaction box is required")
-
+    def _write_redacted_image(self, image_id: str, redactions: list[dict[str, Any]]) -> Path:
         from PIL import Image, ImageDraw  # lazy import
 
         src_path = self.images_by_id[image_id].path
         img = Image.open(src_path)
         img = img.convert("RGB")
         draw = ImageDraw.Draw(img)
-        for box in coerced:
+        for box in redactions:
             x0 = box["x"]
             y0 = box["y"]
             x1 = x0 + box["width"]
             y1 = y0 + box["height"]
             draw.rectangle([x0, y0, x1, y1], fill=(255, 255, 255))
 
-        dest = self.image_dir / "_redacted" / image_id
+        dest = self.image_dir / "_qlab" / "redacted" / image_id
         dest.parent.mkdir(parents=True, exist_ok=True)
         img.save(dest)
         return dest
+
+    def _remove_redacted(self, image_id: str) -> None:
+        dest = self.image_dir / "_qlab" / "redacted" / image_id
+        if dest.exists():
+            dest.unlink()
+
+    @staticmethod
+    def _coerce_redaction_box(raw_box: Any) -> dict[str, Any]:
+        if not isinstance(raw_box, dict):
+            raise ValueError("each redaction box must be an object")
+        bbox: dict[str, Any] = {}
+        for key in ("x", "y", "width", "height"):
+            value = raw_box.get(key)
+            if not isinstance(value, (int, float)):
+                raise ValueError(f"redaction_box.{key} must be numeric")
+            bbox[key] = round(float(value), 3)
+        if bbox["width"] <= 0 or bbox["height"] <= 0:
+            raise ValueError("redaction box width and height must be positive")
+        return bbox
+
+    @classmethod
+    def _coerce_redactions(cls, raw_redactions: Any) -> list[dict[str, Any]]:
+        if raw_redactions in (None, "", {}, []):
+            return []
+        if not isinstance(raw_redactions, list):
+            raise ValueError("redactions must be an array or null")
+        return [cls._coerce_redaction_box(b) for b in raw_redactions]
 
     @staticmethod
     def _coerce_image_size(raw_size: Any) -> dict[str, int] | None:
@@ -292,29 +322,6 @@ def build_handler(store: AnnotationStore, static_dir: Path) -> type[BaseHTTPRequ
         def do_POST(self) -> None:
             parsed = urlparse(self.path)
             path = parsed.path
-
-            if path.startswith("/api/redact/"):
-                image_id = unquote(path.removeprefix("/api/redact/"))
-                content_length = int(self.headers.get("Content-Length", "0"))
-                body = self.rfile.read(content_length)
-                try:
-                    payload = json.loads(body.decode("utf-8") or "{}")
-                    boxes = payload.get("boxes", [])
-                    dest = store.save_redacted(image_id, boxes)
-                except json.JSONDecodeError:
-                    self.send_error(HTTPStatus.BAD_REQUEST, "Request body must be valid JSON")
-                    return
-                except KeyError:
-                    self.send_error(HTTPStatus.NOT_FOUND, "Unknown image id")
-                    return
-                except ValueError as exc:
-                    self.send_error(HTTPStatus.BAD_REQUEST, str(exc))
-                    return
-                except Exception as exc:
-                    self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
-                    return
-                self._send_json({"ok": True, "path": str(dest)})
-                return
 
             if not path.startswith("/api/annotations/"):
                 self.send_error(HTTPStatus.NOT_FOUND, "Not found")
@@ -423,7 +430,7 @@ def main() -> int:
     if not image_dir.is_dir():
         raise SystemExit(f"Image directory does not exist: {image_dir}")
 
-    output_path = Path(args.output).expanduser().resolve() if args.output else image_dir / "annotations.jsonl"
+    output_path = Path(args.output).expanduser().resolve() if args.output else image_dir / "_qlab" / "annotations.jsonl"
     static_dir = Path(__file__).resolve().parent / "static"
     required_assets = [static_dir / "app.css", static_dir / "app.js"]
     missing_assets = [str(path) for path in required_assets if not path.exists()]

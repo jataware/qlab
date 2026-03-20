@@ -398,8 +398,13 @@ input {
   color: #ff9b9b;
 }
 
+.redaction-box-fill {
+  fill: #000;
+  shape-rendering: crispEdges;
+}
+
 .redaction-box-shape {
-  fill: var(--redact-fill);
+  fill: none;
   shape-rendering: crispEdges;
   stroke: var(--redact);
   stroke-width: 2;
@@ -407,7 +412,6 @@ input {
 }
 
 .redaction-box.is-selected .redaction-box-shape {
-  fill: var(--redact-selected-fill);
   stroke: var(--redact-selected);
 }
 
@@ -432,7 +436,7 @@ input {
 }
 
 .redaction-draft-box {
-  fill: var(--redact-draft);
+  fill: rgba(0, 0, 0, 0.8);
   shape-rendering: crispEdges;
   stroke: var(--redact-draft-stroke);
   stroke-dasharray: 8 4;
@@ -444,20 +448,8 @@ input {
   opacity: 0.3;
 }
 
-.annotator-button-redact {
-  background: rgba(255, 77, 77, 0.1);
-  border-color: rgba(255, 77, 77, 0.24);
-  color: #ffb0b0;
-}
-
-.annotator-button-redact.is-active {
-  background: rgba(255, 77, 77, 0.25);
-  border-color: rgba(255, 77, 77, 0.5);
-  color: #fff;
-}
-
-.annotator-shell.is-redacting .annotator-viewer-panel {
-  border-color: rgba(255, 77, 77, 0.3);
+.redaction-box.is-dimmed {
+  opacity: 0.5;
 }
 
 @media (max-width: 1080px) {
